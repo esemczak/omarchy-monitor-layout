@@ -18,6 +18,10 @@ var SCALE_PRESETS = ["1", "1.25", "1.5", "1.6", "2", "2.5", "3"]
 var INTERNAL_NAME = /^(eDP|LVDS|DSI)-/
 
 function statePath(home) { return String(home || "") + STATE_PATH_SUFFIX }
+function stateFilePath(home, xdgStateHome) {
+  var base = xdgStateHome ? String(xdgStateHome) : String(home || "") + "/.local/state"
+  return base + "/omarchy/settings/monitor-layout.json"
+}
 function luaPath(home) { return String(home || "") + LUA_PATH_SUFFIX }
 
 function isObject(v) { return v !== null && typeof v === "object" && !Array.isArray(v) }
@@ -414,7 +418,7 @@ if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     PLUGIN_ID: PLUGIN_ID, WORKSPACE_COUNT: WORKSPACE_COUNT, SIDES: SIDES, ALIGNS: ALIGNS,
     SCALE_PRESETS: SCALE_PRESETS, SIDE_OPTIONS: SIDE_OPTIONS, MAX_OUTPUT_CHARS: MAX_OUTPUT_CHARS,
-    statePath: statePath, luaPath: luaPath,
+    statePath: statePath, stateFilePath: stateFilePath, luaPath: luaPath,
     parseMonitors: parseMonitors, classifyMonitors: classifyMonitors, isInternal: isInternal,
     profileKey: profileKey, monitorSelector: monitorSelector, shortLabel: shortLabel,
     defaultProfile: defaultProfile, defaultState: defaultState, parseState: parseState,

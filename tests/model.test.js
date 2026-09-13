@@ -13,6 +13,11 @@ const studio = {
   scale: 2, disabled: false, x: 1440, y: 0
 }
 
+test("stateFilePath honours XDG_STATE_HOME", () => {
+  assert.equal(Model.stateFilePath("/home/u", ""), "/home/u/.local/state/omarchy/settings/monitor-layout.json")
+  assert.equal(Model.stateFilePath("/home/u", "/tmp/st"), "/tmp/st/omarchy/settings/monitor-layout.json")
+})
+
 test("classifyMonitors finds internal by name prefix and first enabled external", () => {
   const r = Model.classifyMonitors([studio, laptop])
   assert.equal(r.internal.name, "eDP-1")
