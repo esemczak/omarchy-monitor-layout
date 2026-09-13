@@ -6,6 +6,7 @@ set -euo pipefail
 
 src=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 id=$(jq -r '.id' "$src/manifest.json")
+[[ $id =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ && $id != *..* ]] || { echo "invalid plugin id: $id" >&2; exit 1; }
 dest="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/plugins/$id"
 
 mkdir -p "$dest"
