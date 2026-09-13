@@ -42,6 +42,10 @@ omarchy plugin add https://github.com/esemczak/omarchy-monitor-layout.git --enab
 omarchy restart shell
 ```
 
+The widget appears in the left bar section right after the workspace numbers.
+Move it with `omarchy bar move esemczak.monitor-layout --section right` if you
+prefer it elsewhere.
+
 Then open the panel and press **Install into hyprland.lua**. That adds one
 line to `~/.config/hypr/hyprland.lua` right after the monitors require, after
 saving a timestamped backup:
@@ -60,7 +64,7 @@ Omarchy's catch-all rule.
 git clone https://github.com/esemczak/omarchy-monitor-layout.git \
   ~/.config/omarchy/plugins/esemczak.monitor-layout
 omarchy plugin validate ~/.config/omarchy/plugins/esemczak.monitor-layout
-omarchy plugin enable esemczak.monitor-layout right
+omarchy plugin enable esemczak.monitor-layout left
 omarchy restart shell
 ```
 

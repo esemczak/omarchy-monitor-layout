@@ -17,6 +17,6 @@
     "description": "Arrange external monitors and assign workspaces per monitor.",
     "category": "System",
     "allowMultiple": false,
-    "defaultSection": "right"
+    "defaultSection": "left"
   }
 }
