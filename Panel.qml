@@ -165,7 +165,8 @@ Panel {
     id: button
     anchors.fill: parent
     bar: root.bar
-    text: layoutService.external ? "󰍺" : "󰌢"
+    // Distinct from Omarchy's Display panel, which uses the single-monitor glyph.
+    text: "󰖲"
     tooltipText: "Monitor layout · " + layoutService.summary
     onPressed: function(b) {
       if (b === Qt.RightButton) { layoutService.apply(); return }
@@ -210,8 +211,9 @@ Panel {
           fontFamily: root.fontFamily
           iconComponent: Component {
             Text {
-              text: layoutService.external ? "󰍺" : "󰌢"
+              text: "󰖲"
               color: root.foreground
+              opacity: layoutService.external ? 1.0 : 0.5
               font.family: root.fontFamily
               font.pixelSize: Style.font.display
             }

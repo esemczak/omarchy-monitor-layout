@@ -141,3 +141,16 @@ Escape closes. Follows the same PanelKeyCatcher pattern as other panels.
 - `tests/apply-layout.test.sh` runs the apply script against a temp HOME with a
   fake `hyprctl` on PATH.
 - Manual: `omarchy plugin validate`, dev-install, enable, open the panel.
+
+## Implementation notes (added after the first live test)
+
+- The bar instantiates the widget once per monitor, so two Service instances
+  exist and IPC calls land on whichever registered first. A monitor geometry
+  change destroys that instance and the survivor takes over with its own
+  in-memory state. The Service therefore treats the state file as the source
+  of truth: it watches the file and its directory and re-adopts the file on
+  change, except while a local save is pending.
+- Panel setters only act while the popup is open, so widget construction
+  during plugin reloads can never write state.
+- A plugin hot reload keeps the original instance serving IPC, so new IPC
+  functions only appear after `omarchy restart shell`.
