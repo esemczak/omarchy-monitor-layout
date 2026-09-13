@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "esemczak.monitor-layout",
+  "name": "Monitor layout",
+  "version": "0.1.0",
+  "author": "esemczak",
+  "license": "MIT",
+  "description": "Place an external monitor relative to the laptop in physical terms and bind workspaces to monitors permanently.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "Monitor layout",
+    "description": "Arrange external monitors and assign workspaces per monitor.",
+    "category": "System",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}
