@@ -201,3 +201,17 @@ test("previewBoxes scales both monitors into a bounding box in mm", () => {
   assert.ok(ext.x + ext.width <= 300.01 && ext.y + ext.height <= 150.01)
   assert.ok(int.x >= 0 && int.y >= 0)
 })
+
+test("externalRefresh picks an exact mode, falling back to preferred when unavailable", () => {
+  const [ext] = Model.parseMonitors(JSON.stringify([Object.assign({}, studio, {
+    availableModes: ["5120x2880@60.00Hz", "5120x2880@47.95Hz", "2560x1440@120.00Hz", "junk"]
+  })]))
+  assert.deepEqual(Model.refreshRates(ext), ["60.00", "47.95"])
+  assert.deepEqual(Model.refreshOptions(ext).map(o => o.value), ["", "60.00", "47.95"])
+  const rule = (refresh) => Model.renderLua(Object.assign(Model.defaultProfile(), { externalRefresh: refresh }), laptop, ext)
+    .split("\n").find(l => l.includes("desc:Apple"))
+  assert.match(rule("47.95"), /mode = "5120x2880@47\.95"/)
+  assert.match(rule("120.00"), /mode = "preferred"/)
+  assert.match(rule(""), /mode = "preferred"/)
+  assert.equal(Model.parseState(JSON.stringify({ profiles: { k: { externalRefresh: "bad\"" } } })).profiles.k.externalRefresh, "")
+})

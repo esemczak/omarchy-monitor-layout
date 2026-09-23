@@ -22,6 +22,8 @@ and Hyprland re-applies them on its own the moment the monitor is plugged in.
 - **To-scale preview** — both panels drawn from their physical size, with the
   shared edge where the cursor can cross highlighted and quoted in millimetres
 - **Per-monitor scale** — the generated rules carry the scale you choose
+- **External refresh rate** — pick any rate the monitor offers at its current
+  resolution, or leave it on Auto for the monitor's preferred mode
 - **Workspace binding** — cycle each workspace between external, laptop, and
   any; optionally persistent so bound workspaces always exist on their monitor
 - **One profile per external monitor**, applied automatically on hotplug

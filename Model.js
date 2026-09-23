@@ -63,8 +63,50 @@ function normalizeMonitor(m) {
     scale: cleanScale(m.scale, 1),
     disabled: m.disabled === true,
     x: finiteNumber(m.x, 0),
-    y: finiteNumber(m.y, 0)
+    y: finiteNumber(m.y, 0),
+    modes: parseModes(m.availableModes)
   }
+}
+
+// "2560x1440@99.95Hz" -> { width: 2560, height: 1440, refresh: "99.95" }
+var MODE_RE = /^(\d{1,5})x(\d{1,5})@(\d{1,3}(?:\.\d{1,3})?)Hz$/
+var REFRESH_RE = /^\d{1,3}(\.\d{1,3})?$/
+
+function parseModes(raw) {
+  if (!Array.isArray(raw)) return []
+  var out = []
+  for (var i = 0; i < raw.length && out.length < 64; i++) {
+    var match = MODE_RE.exec(String(raw[i]))
+    if (match) out.push({ width: Number(match[1]), height: Number(match[2]), refresh: match[3] })
+  }
+  return out
+}
+
+// Refresh rates the monitor offers at its current resolution, fastest first.
+function refreshRates(monitor) {
+  var modes = monitor && Array.isArray(monitor.modes) ? monitor.modes : []
+  var seen = {}
+  var rates = []
+  for (var i = 0; i < modes.length; i++) {
+    var m = modes[i]
+    if (m.width !== monitor.width || m.height !== monitor.height || seen[m.refresh]) continue
+    seen[m.refresh] = true
+    rates.push(m.refresh)
+  }
+  return rates.sort(function(a, b) { return Number(b) - Number(a) })
+}
+
+function refreshOptions(monitor) {
+  return [{ value: "", label: "Auto (preferred)" }].concat(refreshRates(monitor).map(function(r) {
+    return { value: r, label: r + " Hz" }
+  }))
+}
+
+// Exact mode for the chosen rate, or "preferred" when none is chosen or the
+// monitor no longer offers it at this resolution (an unknown mode = black screen).
+function monitorMode(monitor, refresh) {
+  if (!refresh || refreshRates(monitor).indexOf(refresh) < 0) return "preferred"
+  return monitor.width + "x" + monitor.height + "@" + refresh
 }
 
 function isInternal(monitor) {
@@ -116,6 +158,7 @@ function defaultProfile() {
     offsetMm: 0,
     internalScale: 2,
     externalScale: 2,
+    externalRefresh: "",
     workspaces: {},
     persistent: true
   }
@@ -145,6 +188,8 @@ function cleanProfile(raw) {
   if (isFinite(offset)) base.offsetMm = Math.max(-MAX_OFFSET_MM, Math.min(MAX_OFFSET_MM, Math.round(offset)))
   base.internalScale = cleanScale(raw.internalScale, base.internalScale)
   base.externalScale = cleanScale(raw.externalScale, base.externalScale)
+  if (typeof raw.externalRefresh === "string" && (raw.externalRefresh === "" || REFRESH_RE.test(raw.externalRefresh)))
+    base.externalRefresh = raw.externalRefresh
   base.workspaces = cleanWorkspaces(raw.workspaces)
   if (typeof raw.persistent === "boolean") base.persistent = raw.persistent
   return base
@@ -241,7 +286,8 @@ function computeLayout(profile, internal, external) {
 
   return {
     internal: { monitor: internal, selector: monitorSelector(internal), position: iPos, size: iSize, scale: p.internalScale },
-    external: { monitor: external, selector: monitorSelector(external), position: ePos, size: eSize, scale: p.externalScale },
+    external: { monitor: external, selector: monitorSelector(external), position: ePos, size: eSize, scale: p.externalScale,
+      mode: monitorMode(external, p.externalRefresh) },
     overlap: sharedEdgeOverlap(p.side, internal, external, iPos, iSize, ePos, eSize)
   }
 }
@@ -340,7 +386,7 @@ function luaNumber(n) {
 
 function monitorRule(entry) {
   return "hl.monitor({ output = " + luaString(entry.selector)
-    + ", mode = \"preferred\", position = " + luaString(entry.position.x + "x" + entry.position.y)
+    + ", mode = " + luaString(entry.mode || "preferred") + ", position = " + luaString(entry.position.x + "x" + entry.position.y)
     + ", scale = " + luaNumber(entry.scale) + " })"
 }
 
@@ -417,7 +463,8 @@ function summarizeMonitors(internal, external) {
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     PLUGIN_ID: PLUGIN_ID, WORKSPACE_COUNT: WORKSPACE_COUNT, SIDES: SIDES, ALIGNS: ALIGNS,
-    SCALE_PRESETS: SCALE_PRESETS, SIDE_OPTIONS: SIDE_OPTIONS, MAX_OUTPUT_CHARS: MAX_OUTPUT_CHARS,
+    SCALE_PRESETS: SCALE_PRESETS, refreshRates: refreshRates, refreshOptions: refreshOptions,
+    monitorMode: monitorMode, SIDE_OPTIONS: SIDE_OPTIONS, MAX_OUTPUT_CHARS: MAX_OUTPUT_CHARS,
     statePath: statePath, stateFilePath: stateFilePath, luaPath: luaPath,
     parseMonitors: parseMonitors, classifyMonitors: classifyMonitors, isInternal: isInternal,
     profileKey: profileKey, monitorSelector: monitorSelector, shortLabel: shortLabel,

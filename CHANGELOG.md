@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- External refresh rate dropdown: pick any rate the monitor offers at its current resolution; the generated rule then carries an exact mode instead of `preferred`, and falls back to `preferred` when the saved rate is no longer available
+
 ## [0.1.0] - 2026-09-13
 
 ### Added
