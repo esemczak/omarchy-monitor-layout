@@ -33,6 +33,7 @@ Panel {
       list.push("align")
       if (layoutService.profile.align === "custom") list.push("offset")
       list.push("scale")
+      list.push("refresh")
       list.push("workspaces")
       list.push("persistent")
     }
@@ -380,6 +381,17 @@ Panel {
               onHovered: function(h) { if (h) root.hoverSection("scale", 1) }
               onChanged: function(v) { if (root.opened) layoutService.setExternalScale(v) }
             }
+          }
+
+          Dropdown {
+            width: parent.width
+            label: "External refresh rate"
+            fontFamily: root.fontFamily
+            options: Model.refreshOptions(layoutService.external)
+            value: layoutService.profile.externalRefresh
+            hasCursor: root.cursorActive && root.focusSection === "refresh"
+            onHovered: function(h) { if (h) root.hoverSection("refresh", 0) }
+            onChanged: function(v) { if (root.opened) layoutService.setExternalRefresh(v) }
           }
 
           PanelSeparator { foreground: root.foreground }

@@ -59,6 +59,7 @@ Item {
   function setOffsetMm(value) { updateProfile({ offsetMm: Number(value) }) }
   function setInternalScale(value) { updateProfile({ internalScale: Number(value) }) }
   function setExternalScale(value) { updateProfile({ externalScale: Number(value) }) }
+  function setExternalRefresh(value) { updateProfile({ externalRefresh: String(value || "") }) }
   function setPersistent(enabled) { updateProfile({ persistent: !!enabled }) }
 
   function setWorkspace(id, target) {
