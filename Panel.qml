@@ -3,6 +3,7 @@ import Quickshell
 import Quickshell.Io
 import qs.Commons
 import qs.Ui
+import "."
 import "Model.js" as Model
 
 Panel {
@@ -16,6 +17,10 @@ Panel {
   readonly property color accent: Color.accent
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
   readonly property color panelBackground: bar ? bar.background : Color.background
+  readonly property var monitorService: layoutService
+
+  Component.onCompleted: LaptopScreensaver.registerOwner(root)
+  Component.onDestruction: LaptopScreensaver.unregisterOwner(root)
 
   // Keyboard cursor: sections in visual order; h/l walks within a row.
   property string focusSection: "side"
@@ -36,6 +41,8 @@ Panel {
       list.push("workspaces")
       list.push("persistent")
     }
+    list.push("screensaver")
+    list.push("brightness")
     if (!layoutService.requireInstalled) list.push("install")
     if (arrangementVisible) list.push("apply")
     return list
@@ -70,6 +77,7 @@ Panel {
       var count = sectionCount(focusSection)
       selectedIndex = Math.max(0, Math.min(count - 1, selectedIndex + dx))
       if (focusSection === "offset") layoutService.setOffsetMm(layoutService.profile.offsetMm + dx * 5)
+      if (focusSection === "brightness") LaptopScreensaver.setBrightness(LaptopScreensaver.brightness + dx)
     }
   }
 
@@ -85,6 +93,7 @@ Panel {
     else if (focusSection === "align") layoutService.setAlign(alignOptions[selectedIndex].value)
     else if (focusSection === "workspaces") layoutService.cycleWorkspace(selectedIndex + 1)
     else if (focusSection === "persistent") layoutService.setPersistent(!layoutService.profile.persistent)
+    else if (focusSection === "screensaver") LaptopScreensaver.setEnabled(!LaptopScreensaver.enabled)
     else if (focusSection === "install") layoutService.installRequire()
     else if (focusSection === "apply") layoutService.apply()
   }
@@ -129,6 +138,14 @@ Panel {
     function apply(): string { layoutService.apply(); return "ok" }
     function install(): string { layoutService.installRequire(); return "ok" }
     function refresh(): string { layoutService.reload(); return "ok" }
+    function setScreensaver(enabled: string): string {
+      LaptopScreensaver.setEnabled(enabled === "true")
+      return String(LaptopScreensaver.enabled)
+    }
+    function setScreensaverBrightness(percent: string): string {
+      LaptopScreensaver.setBrightness(Number(percent))
+      return String(LaptopScreensaver.brightness)
+    }
     function setSide(side: string): string { layoutService.setSide(side); return layoutService.profile.side }
     function setAlign(align: string): string { layoutService.setAlign(align); return layoutService.profile.align }
     function setOffset(mm: string): string { layoutService.setOffsetMm(mm); return String(layoutService.profile.offsetMm) }
@@ -145,6 +162,9 @@ Panel {
         profile: layoutService.profile,
         generatedProfile: layoutService.state.generatedProfile,
         requireInstalled: layoutService.requireInstalled,
+        laptopScreensaver: LaptopScreensaver.enabled,
+        screensaverBrightness: LaptopScreensaver.brightness,
+        screensaverShowing: LaptopScreensaver.showing,
         lastResult: layoutService.lastResult
       })
     }
@@ -195,6 +215,13 @@ Panel {
         if (t === "r") layoutService.refreshMonitors()
         if (t === "a") layoutService.apply()
       }
+
+      Flickable {
+        anchors.fill: parent
+        contentWidth: width
+        contentHeight: column.implicitHeight
+        clip: true
+        boundsBehavior: Flickable.StopAtBounds
 
       Column {
         id: column
@@ -438,6 +465,41 @@ Panel {
 
         PanelSeparator { foreground: root.foreground }
 
+        Toggle {
+          width: parent.width
+          label: "Laptop screensaver when connected"
+          description: "Moving clock on the laptop after 15 seconds away. Move onto the laptop to dismiss; unplug the external to stop."
+          foreground: root.foreground
+          accent: root.accent
+          fontFamily: root.fontFamily
+          checked: LaptopScreensaver.enabled
+          hasCursor: root.cursorActive && root.focusSection === "screensaver"
+          onHovered: function(h) { if (h) root.hoverSection("screensaver", 0) }
+          onClicked: if (root.opened) LaptopScreensaver.setEnabled(!LaptopScreensaver.enabled)
+        }
+
+        BrightnessSlider {
+          width: parent.width
+          value: LaptopScreensaver.brightness
+          foreground: root.foreground
+          accent: root.accent
+          fontFamily: root.fontFamily
+          hasCursor: root.cursorActive && root.focusSection === "brightness"
+          onHovered: function(h) { if (h) root.hoverSection("brightness", 0) }
+          onModified: function(v) { if (root.opened) LaptopScreensaver.setBrightness(v) }
+        }
+
+        Text {
+          width: parent.width
+          text: "0% uses minimum brightness. Dimming never increases brightness; dismissal restores the previous level."
+          color: root.dim
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
+          wrapMode: Text.WordWrap
+        }
+
+        PanelSeparator { foreground: root.foreground }
+
         // ---- footer --------------------------------------------------------
         Column {
           width: parent.width
@@ -519,6 +581,7 @@ Panel {
             visible: root.arrangementVisible
           }
         }
+      }
       }
     }
   }

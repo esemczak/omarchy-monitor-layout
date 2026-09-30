@@ -98,6 +98,41 @@ monitor is connected the plugin regenerates the file for that profile.
 
 Settings live in `~/.local/state/omarchy/settings/monitor-layout.json`.
 
+### Laptop screensaver
+
+Enable **Laptop screensaver when connected** in the panel to show a slowly
+moving clock and full-month calendar with today highlighted on a dark
+laptop screen while you work on an external display. This option is saved
+globally and defaults to off; it takes effect
+without clicking Apply.
+
+A compact calendar sits on the left, with the large clock on the right and
+weather underneath it. The entire arrangement drifts slowly across the screen.
+
+Set **Screensaver brightness (%)** in the plugin panel to choose the dim level
+from 0–100%. It saves immediately. The default, 0%, uses the lowest nonzero
+hardware value. Dimming never increases brightness above the original level.
+Its exact previous brightness is restored on dismissal,
+disconnect, disabling the option, or shell shutdown. A separate guard also
+restores after the shell or its tracked brightness launcher dies. External
+display brightness is unaffected. If backlight control is unavailable, the
+overlay continues without dimming.
+
+Temperature and wind use `omarchy weather status`, sharing the standard
+weather plugin's configured location. The screensaver refreshes this every
+15 minutes while visible and when the configured location changes. Weather
+is omitted when the command is unavailable or the request fails.
+
+The overlay appears after the pointer and keyboard focus have both been away
+from the laptop for 15 seconds. Moving the pointer onto the laptop, focusing a
+laptop window, or opening the plugin panel dismisses it. It returns after
+another 15 seconds away. Disconnecting the last active external display stops
+it immediately; reconnecting starts the same delay.
+
+The external display stays usable. The overlay does not take keyboard focus,
+hide the cursor globally, or prevent the normal system lock and display sleep.
+It is a visual screensaver, not a lock screen or display power control.
+
 ### Physical alignment
 
 Millimetre offsets are converted to logical pixels using the laptop panel's
@@ -109,9 +144,24 @@ rectangular logical outputs, not something the plugin can fully remove.
 
 ### Scale
 
-The generated rules set an explicit scale for both monitors. Changing scale in
-Omarchy's built-in Display panel edits `monitors.lua`, which this file
-overrides, so change scale here instead while the plugin is installed.
+The generated rules set an explicit scale for both monitors, which would
+otherwise override the catch-all rule that Omarchy's own Display panel (and
+the `omarchy hyprland monitor scaling` keybinds) persist to `monitors.lua`,
+and the reload that write triggers would undo their live change. To keep that
+panel working, the plugin watches the audit log that tool appends to
+(`~/.local/state/omarchy/monitor-scaling.log`): each new entry names the
+monitor and scale, which the plugin adopts into the current profile before
+regenerating the layout. Expect a brief flicker while Hyprland reloads twice.
+
+Apply goes the other way too: it writes the laptop scale into the stock
+`omarchy_monitor_scale` / `omarchy_gdk_scale` lines of `monitors.lua` (only
+if those lines are present), so `GDK_SCALE` and the catch-all rule agree with
+the layout. A hand-customised `monitors.lua` is left alone.
+
+This also works with the external monitor unplugged: the profile remembers
+its geometry from the last apply. Profiles saved before this was recorded fall
+back to a laptop-only rule and regain the full layout the next time the
+monitor is connected.
 
 ## IPC
 
@@ -125,6 +175,8 @@ omarchy-shell esemczak.monitor-layout setOffset 40
 omarchy-shell esemczak.monitor-layout setWorkspace 3 external|internal|none
 omarchy-shell esemczak.monitor-layout lua      # print the Lua that would be applied
 omarchy-shell esemczak.monitor-layout status   # JSON
+omarchy-shell esemczak.monitor-layout setScreensaver true|false
+omarchy-shell esemczak.monitor-layout setScreensaverBrightness 5
 ```
 
 ## Remove
@@ -147,12 +199,14 @@ rm -f ~/.local/state/omarchy/settings/monitor-layout.json
 ```bash
 node --test tests/               # pure layout, state and Lua rendering tests
 bash tests/apply-layout.test.sh  # shell helpers against a temp HOME and fake hyprctl
-./dev-install.sh                 # copy into ~/.config/omarchy/plugins/ and validate
+bash tests/dev-install.test.sh   # safe deployment sequence against a fake shell host
+./dev-install.sh                 # validate, stop live shell, install, restart shell
 ```
 
-The shell hot-reloads plugin files, but a hot reload keeps the original
-instance serving IPC. After changing `Panel.qml` or `Service.qml`, run
-`omarchy restart shell` to test IPC changes.
+Live plugin reloads have crashed Quickshell during development. The installer
+stages outside the watched plugin tree and stops the running shell before
+replacing files, then restarts it. It refuses to stop a locked session. No
+additional restart is needed after installation.
 
 ## License
 

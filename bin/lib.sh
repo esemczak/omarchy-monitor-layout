@@ -15,6 +15,8 @@ ml_state_home="${XDG_STATE_HOME:-$ml_home/.local/state}"
 ml_state_file="$ml_state_home/omarchy/settings/monitor-layout.json"
 ml_hypr_dir="$ml_config_home/hypr"
 ml_lua_file="$ml_hypr_dir/monitor-layout.lua"
+ml_monitors_lua="$ml_hypr_dir/monitors.lua"
+ml_scaling_log="$ml_state_home/omarchy/monitor-scaling.log"
 ml_hyprland_lua="$ml_hypr_dir/hyprland.lua"
 
 # Read stdin up to a byte ceiling. Prints the content; fails when the input is

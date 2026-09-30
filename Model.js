@@ -71,6 +71,58 @@ function isInternal(monitor) {
   return !!monitor && INTERNAL_NAME.test(String(monitor.name || ""))
 }
 
+// Use Quickshell's live screens here, rather than the cached layout discovery:
+// unplugging an output must remove the overlay before the refresh debounce.
+function laptopScreensaverTarget(enabled, screens) {
+  if (!enabled || !screens || typeof screens === "string" || typeof screens.length !== "number") return ""
+  var laptop = ""
+  var external = false
+  for (var i = 0; i < screens.length; i++) {
+    var screen = screens[i]
+    if (!screen || !screen.name || screen.disabled === true) continue
+    if (isInternal(screen)) { if (!laptop) laptop = String(screen.name) }
+    else external = true
+  }
+  return external ? laptop : ""
+}
+
+function parseCursorPosition(text) {
+  try {
+    var point = JSON.parse(String(text || ""))
+    if (isObject(point) && typeof point.x === "number" && isFinite(point.x)
+        && typeof point.y === "number" && isFinite(point.y))
+      return { x: point.x, y: point.y }
+  } catch (e) {}
+  return null
+}
+
+function screensaverMayShow(screen, point, focusedMonitor, panelOpen) {
+  if (!screen || !point || !focusedMonitor || panelOpen || focusedMonitor === screen.name) return false
+  // Screen geometry and cursorpos are both in logical compositor coordinates.
+  return !(point.x >= screen.x && point.x < screen.x + screen.width
+    && point.y >= screen.y && point.y < screen.y + screen.height)
+}
+
+function calendarDays(year, month, today) {
+  var offset = (new Date(year, month, 1, 12).getDay() + 6) % 7
+  var days = []
+  for (var i = 0; i < 42; i++) {
+    // Construct local dates individually so daylight-saving changes do not
+    // shift a cell into the preceding or following date.
+    var date = new Date(year, month, 1 - offset + i, 12)
+    var current = date.getFullYear() === year && date.getMonth() === month
+    days.push({ day: date.getDate(), currentMonth: current, today: current && date.getDate() === today })
+  }
+  return days
+}
+
+function parseWeatherStatus(text) {
+  var raw = String(text || "")
+  if (raw.length > 4096) return ""
+  var status = raw.trim().replace(/\s+/g, " ")
+  return status === "Weather unavailable" ? "" : status.slice(0, 180)
+}
+
 function classifyMonitors(list) {
   var result = { internal: null, external: null }
   if (!Array.isArray(list)) return result
@@ -122,7 +174,11 @@ function defaultProfile() {
 }
 
 function defaultState() {
-  return { version: 1, generatedProfile: "", profiles: {} }
+  return { version: 1, generatedProfile: "", profiles: {}, scalingLogMtime: 0, laptopScreensaver: false, screensaverBrightness: 0 }
+}
+
+function cleanScreensaverBrightness(value) {
+  return Math.max(0, Math.min(100, Math.round(finiteNumber(value, 0))))
 }
 
 function cleanWorkspaces(raw) {
@@ -147,7 +203,17 @@ function cleanProfile(raw) {
   base.externalScale = cleanScale(raw.externalScale, base.externalScale)
   base.workspaces = cleanWorkspaces(raw.workspaces)
   if (typeof raw.persistent === "boolean") base.persistent = raw.persistent
+  // Geometry of the external this profile was applied for, so the layout can
+  // be regenerated (e.g. after a laptop scale change) while it is unplugged.
+  if (isObject(raw.monitor)) {
+    var snapshot = normalizeMonitor(raw.monitor)
+    if (snapshot.name !== "" && snapshot.width > 0 && snapshot.height > 0) base.monitor = snapshot
+  }
   return base
+}
+
+function rememberedExternal(profile) {
+  return profile && isObject(profile.monitor) ? profile.monitor : null
 }
 
 function parseState(text) {
@@ -157,7 +223,11 @@ function parseState(text) {
   var parsed
   try { parsed = JSON.parse(raw) } catch (e) { return state }
   if (!isObject(parsed)) return state
+  state.laptopScreensaver = parsed.laptopScreensaver === true
+  state.screensaverBrightness = cleanScreensaverBrightness(parsed.screensaverBrightness)
   if (typeof parsed.generatedProfile === "string") state.generatedProfile = parsed.generatedProfile
+  var logMtime = Number(parsed.scalingLogMtime)
+  if (isFinite(logMtime) && logMtime >= 0) state.scalingLogMtime = logMtime
   if (isObject(parsed.profiles)) {
     var keys = Object.keys(parsed.profiles).slice(0, MAX_PROFILES)
     for (var i = 0; i < keys.length; i++) {
@@ -182,6 +252,15 @@ function profileFor(state, key) {
 function withProfile(state, key, profile) {
   var next = parseState(JSON.stringify(state || {}))
   if (key) next.profiles[key] = cleanProfile(profile)
+  return next
+}
+
+// The audit log mtime of the last omarchy-hyprland-monitor-scaling change that
+// was adopted (or deliberately skipped). Kept in the state file because the bar,
+// and this plugin with it, is rebuilt whenever a monitor's scale changes.
+function withScalingLogMtime(state, mtime) {
+  var next = parseState(JSON.stringify(state || {}))
+  next.scalingLogMtime = Math.max(0, finiteNumber(mtime, 0))
   return next
 }
 
@@ -349,15 +428,24 @@ function renderLua(profile, internal, external) {
     "-- Generated by " + PLUGIN_ID + ". Edits are overwritten on apply.",
     "-- Placement and workspace binding for the external monitor; see the plugin panel."
   ]
-  if (!profile || !internal || !external) return lines.join("\n") + "\n"
+  if (!profile || !internal) return lines.join("\n") + "\n"
 
-  var layout = computeLayout(profile, internal, external)
   var p = cleanProfile(profile)
+  var layout
+  if (external) {
+    layout = computeLayout(p, internal, external)
+  } else {
+    // External unplugged and no remembered geometry: keep the laptop rule (so a
+    // scale change sticks) and only the workspaces bound to it.
+    var iSize = logicalSize(internal, p.internalScale)
+    layout = { internal: { selector: monitorSelector(internal), position: { x: 0, y: 0 }, size: iSize, scale: p.internalScale }, external: null }
+  }
   lines.push("")
   lines.push(monitorRule(layout.internal))
-  lines.push(monitorRule(layout.external))
+  if (layout.external) lines.push(monitorRule(layout.external))
 
   var ids = Object.keys(p.workspaces).map(Number).filter(isFinite).sort(function(a, b) { return a - b })
+  if (!layout.external) ids = ids.filter(function(id) { return p.workspaces[String(id)] === "internal" })
   if (ids.length) lines.push("")
   for (var i = 0; i < ids.length; i++) {
     var id = String(ids[i])
@@ -368,6 +456,63 @@ function renderLua(profile, internal, external) {
     lines.push(rule)
   }
   return lines.join("\n") + "\n"
+}
+
+// ---------------------------------------------------------------------------
+// Scale changes made through Omarchy's own Display panel
+//
+// omarchy-hyprland-monitor-scaling changes the focused monitor live, appends
+// an audit entry, and persists the value into the catch-all rule in
+// monitors.lua. That edit makes Hyprland reload its config, which re-applies
+// our explicit per-output rules and undoes the change. The Service watches
+// the audit log (which nothing else writes) and adopts each new entry into
+// the profile, then regenerates the layout.
+
+// Entries older than this at the time they are noticed are recorded as handled
+// without being applied: a fresh install must not replay an old change.
+var SCALING_LOG_MAX_AGE_S = 60
+
+function parseScalingPayload(text) {
+  var out = { logMtime: 0, age: 0, scaling: null, state: "" }
+  var raw = String(text || "")
+  if (!raw || raw.length > MAX_OUTPUT_CHARS) return out
+  try {
+    var parsed = JSON.parse(raw)
+    if (!isObject(parsed)) return out
+    var mtime = Number(parsed.logMtime)
+    if (isFinite(mtime) && mtime >= 0) out.logMtime = mtime
+    var age = Number(parsed.age)
+    if (isFinite(age) && age >= 0) out.age = age
+    if (typeof parsed.state === "string") out.state = parsed.state
+    if (isObject(parsed.scaling)) {
+      var at = Number(parsed.scaling.at)
+      var scale = cleanScale(parsed.scaling.scale, null)
+      var monitor = typeof parsed.scaling.monitor === "string" ? parsed.scaling.monitor : ""
+      if (isFinite(at) && at > 0 && scale !== null && monitor !== "") out.scaling = { at: at, monitor: monitor, scale: scale }
+    }
+  } catch (e) {}
+  return out
+}
+
+// The change to adopt from a payload, or null when the log is missing, its
+// last entry was already handled, or it is too old to be a live request.
+function scalingRequest(payload, handledMtime) {
+  if (!payload || !payload.scaling || !(payload.logMtime > 0)) return null
+  if (payload.logMtime === finiteNumber(handledMtime, 0)) return null
+  if (payload.age > SCALING_LOG_MAX_AGE_S) return null
+  return { monitor: payload.scaling.monitor, scale: payload.scaling.scale }
+}
+
+function scalePatchForMonitor(profile, internal, external, monitorName, scale) {
+  var value = cleanScale(scale, null)
+  if (value === null || !monitorName) return null
+  var p = cleanProfile(profile)
+  var name = String(monitorName)
+  if (internal && String(internal.name) === name)
+    return p.internalScale === value ? null : { internalScale: value }
+  if (external && String(external.name) === name)
+    return p.externalScale === value ? null : { externalScale: value }
+  return null
 }
 
 // ---------------------------------------------------------------------------
@@ -424,8 +569,13 @@ if (typeof module !== "undefined" && module.exports) {
     defaultProfile: defaultProfile, defaultState: defaultState, parseState: parseState,
     serializeState: serializeState, profileFor: profileFor, withProfile: withProfile,
     cycleAssignment: cycleAssignment, logicalSize: logicalSize, computeLayout: computeLayout,
-    previewBoxes: previewBoxes, alignLabels: alignLabels, luaString: luaString, renderLua: renderLua,
+    previewBoxes: previewBoxes, alignLabels: alignLabels, luaString: luaString, luaNumber: luaNumber, renderLua: renderLua,
     parseBootstrapPayload: parseBootstrapPayload, parseApplyResult: parseApplyResult,
-    summarizeMonitors: summarizeMonitors
+    summarizeMonitors: summarizeMonitors, scalePatchForMonitor: scalePatchForMonitor,
+    parseScalingPayload: parseScalingPayload, scalingRequest: scalingRequest, withScalingLogMtime: withScalingLogMtime,
+    cleanProfile: cleanProfile, rememberedExternal: rememberedExternal,
+    laptopScreensaverTarget: laptopScreensaverTarget, parseCursorPosition: parseCursorPosition,
+    screensaverMayShow: screensaverMayShow, calendarDays: calendarDays,
+    parseWeatherStatus: parseWeatherStatus, cleanScreensaverBrightness: cleanScreensaverBrightness
   }
 }

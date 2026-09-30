@@ -36,6 +36,7 @@ export GUARD_PAUSED="$tmp/paused"
 
 failures=0
 not_grep() { ! grep "$@"; }
+not_bash_ok() { ! bash "$@" >/dev/null 2>&1; }
 check() {
   local label="$1"; shift
   if "$@"; then echo "ok   $label"; else echo "FAIL $label"; failures=$((failures + 1)); fi
@@ -106,6 +107,76 @@ check "empty input leaves file" [ "$(cat "$lua_file")" = "$before" ]
 # Input that does not carry the plugin header is refused.
 result=$(printf 'os.execute("rm -rf /")\n' | bash "$repo/bin/apply-layout.sh")
 check "unexpected input refused" [ "$(jq -r '.ok' <<<"$result")" = "false" ]
+
+# --- read-scaling-log.sh ----------------------------------------------------
+monitors_lua="$HOME/.config/hypr/monitors.lua"
+scaling_log="$HOME/.local/state/omarchy/monitor-scaling.log"
+rm -f "$scaling_log"
+payload=$(bash "$repo/bin/read-scaling-log.sh")
+check "read-scaling-log reports a missing log as mtime 0" [ "$(jq -r '.logMtime' <<<"$payload")" = "0" ]
+check "read-scaling-log reports a missing log as null scaling" [ "$(jq -c '.scaling' <<<"$payload")" = "null" ]
+check "read-scaling-log reports the state text" [ "$(jq -r '.state' <<<"$payload")" = '{"version":1,"profiles":{}}' ]
+
+mkdir -p "$(dirname "$scaling_log")"
+printf 'at=2026-09-15T21:03:17+09:30\trequested=1.6\tcurrent=2\tnew=1.6\tmonitor=DP-1\tpid=1\n' > "$scaling_log"
+printf 'at=2026-09-15T21:03:23+09:30\trequested=up\tcurrent=1.6\tnew=2\tmonitor=eDP-1\tpid=2\n' >> "$scaling_log"
+touch -d '2026-09-15T21:03:23.25+09:30' "$scaling_log"
+payload=$(bash "$repo/bin/read-scaling-log.sh")
+check "read-scaling-log reports the log mtime" [ "$(jq -r ".logMtime == $(stat -c %.Y "$scaling_log")" <<<"$payload")" = "true" ]
+check "read-scaling-log reports the log age" [ "$(jq -r '.age > 60' <<<"$payload")" = "true" ]
+check "read-scaling-log reports the last entry's monitor" [ "$(jq -r '.scaling.monitor' <<<"$payload")" = "eDP-1" ]
+check "read-scaling-log reports the last entry's scale" [ "$(jq -r '.scaling.scale' <<<"$payload")" = "2" ]
+check "read-scaling-log reports the last entry's time as epoch" [ "$(jq -r '.scaling.at' <<<"$payload")" = "$(date -d '2026-09-15T21:03:23+09:30' +%s)" ]
+printf 'garbage line\n' >> "$scaling_log"
+payload=$(bash "$repo/bin/read-scaling-log.sh")
+check "read-scaling-log reports an unreadable last entry as null" [ "$(jq -c '.scaling' <<<"$payload")" = "null" ]
+rm -f "$scaling_log"
+
+# --- sync-monitors-lua.sh ---------------------------------------------------
+stock_lua() {
+  cat > "$monitors_lua" <<'LUA'
+-- See https://wiki.hypr.land/Configuring/Basics/Monitors/
+
+local omarchy_gdk_scale = 2
+local omarchy_monitor_scale = 2
+
+hl.env("GDK_SCALE", tostring(omarchy_gdk_scale))
+hl.monitor({ output = "", mode = "preferred", position = "auto", scale = omarchy_monitor_scale })
+LUA
+}
+stock_lua
+bash "$repo/bin/sync-monitors-lua.sh" 1.6 >/dev/null
+check "sync-monitors-lua rewrites the stock scale line" grep -qx 'local omarchy_monitor_scale = 1.6' "$monitors_lua"
+check "sync-monitors-lua rounds the gdk scale" grep -qx 'local omarchy_gdk_scale = 2' "$monitors_lua"
+check "sync-monitors-lua leaves the rest alone" grep -qx 'hl.env("GDK_SCALE", tostring(omarchy_gdk_scale))' "$monitors_lua"
+
+bash "$repo/bin/sync-monitors-lua.sh" 1.25 >/dev/null
+check "sync-monitors-lua rounds 1.25 down for gdk" grep -qx 'local omarchy_gdk_scale = 1' "$monitors_lua"
+
+touch -d '2020-01-01' "$monitors_lua"
+bash "$repo/bin/sync-monitors-lua.sh" 1.25 >/dev/null
+check "sync-monitors-lua does not rewrite an unchanged file" [ "$(stat -c %Y "$monitors_lua")" = "$(date -d '2020-01-01' +%s)" ]
+
+printf 'hl.env("GDK_SCALE", "2")\nhl.monitor({ output = "", mode = "preferred", position = "auto", scale = 2 })\n' > "$monitors_lua"
+bash "$repo/bin/sync-monitors-lua.sh" 1 >/dev/null
+check "sync-monitors-lua rewrites the inlined catch-all" grep -qx 'hl.monitor({ output = "", mode = "preferred", position = "auto", scale = 1 })' "$monitors_lua"
+check "sync-monitors-lua rewrites the inlined gdk env" grep -qx 'hl.env("GDK_SCALE", "1")' "$monitors_lua"
+
+printf 'hl.monitor({ output = "DP-1", mode = "preferred", position = "0x0", scale = 2 })\n' > "$monitors_lua"
+before=$(cat "$monitors_lua")
+bash "$repo/bin/sync-monitors-lua.sh" 1 >/dev/null
+check "sync-monitors-lua leaves a customised file untouched" [ "$(cat "$monitors_lua")" = "$before" ]
+
+stock_lua
+mv "$monitors_lua" "$tmp/real-monitors.lua"; ln -s "$tmp/real-monitors.lua" "$monitors_lua"
+bash "$repo/bin/sync-monitors-lua.sh" 3 >/dev/null
+check "sync-monitors-lua writes through a symlink" test -L "$monitors_lua"
+check "sync-monitors-lua updates the symlink target" grep -qx 'local omarchy_monitor_scale = 3' "$tmp/real-monitors.lua"
+rm -f "$monitors_lua"; stock_lua
+
+check "sync-monitors-lua rejects a bad scale" not_bash_ok "$repo/bin/sync-monitors-lua.sh" "2; rm -rf /"
+check "sync-monitors-lua rejects an out-of-range scale" not_bash_ok "$repo/bin/sync-monitors-lua.sh" 12
+check "sync-monitors-lua keeps the file on a bad scale" grep -qx 'local omarchy_monitor_scale = 2' "$monitors_lua"
 
 if (( failures )); then echo "$failures failure(s)"; exit 1; fi
 echo "all passed"

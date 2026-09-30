@@ -20,6 +20,13 @@ Item {
   property var lastResult: ({ ok: false, message: "", errors: [] })
   property string lastError: ""
   property bool autoApplyPending: false
+  // A scaling-log read finished before the state loaded.
+  property bool scalingCheckPending: false
+  // Apply waiting for the monitors.lua sync and state write it depends on.
+  property var queuedApply: null
+  // What the running apply is for, so its result lands on the right profile.
+  property string applyKey: ""
+  property var applyExternal: null
 
   readonly property string pluginDir: {
     var scriptUrl = Qt.resolvedUrl("bin/lib.sh")
@@ -60,6 +67,22 @@ Item {
   function setInternalScale(value) { updateProfile({ internalScale: Number(value) }) }
   function setExternalScale(value) { updateProfile({ externalScale: Number(value) }) }
   function setPersistent(enabled) { updateProfile({ persistent: !!enabled }) }
+
+  function setLaptopScreensaver(enabled) {
+    if (!stateLoaded) return
+    var next = Model.parseState(JSON.stringify(state))
+    next.laptopScreensaver = !!enabled
+    state = next
+    scheduleStateSave()
+  }
+
+  function setScreensaverBrightness(value) {
+    if (!stateLoaded) return
+    var next = Model.parseState(JSON.stringify(state))
+    next.screensaverBrightness = Model.cleanScreensaverBrightness(value)
+    state = next
+    scheduleStateSave()
+  }
 
   function setWorkspace(id, target) {
     var key = String(Number(id))
@@ -123,8 +146,58 @@ Item {
   function onMonitorsRefreshed() {
     // A monitor with a saved profile that differs from what the Lua file was
     // last generated for: regenerate so its placement and workspaces follow it.
-    if (external && hasProfile && state.generatedProfile !== externalKey && requireInstalled)
+    // Also regenerate once for profiles saved before the external's geometry
+    // was remembered, or after a laptop-only regeneration dropped its rule.
+    if (external && hasProfile && requireInstalled
+        && (state.generatedProfile !== externalKey || !Model.rememberedExternal(profile)))
       apply()
+  }
+
+  // ---- scale changes from Omarchy's Display panel --------------------------
+
+  function checkScalingLog() {
+    if (scalingProc.running) { scalingCheckTimer.restart(); return }
+    scalingProc.running = true
+  }
+
+  // One Service runs per bar and a scale change rebuilds the bar, so decide
+  // from what is on disk: the state text in the payload says which audit entry
+  // was handled last, and adoption patches that on-disk state rather than a
+  // copy another instance may have overtaken.
+  function onScalingLogRead(payload) {
+    if (!stateLoaded) { scalingCheckPending = true; return }
+    var disk = Model.parseState(payload.state)
+    var request = Model.scalingRequest(payload, disk.scalingLogMtime)
+    if (!request) {
+      // Nothing to adopt, but remember an unhandled (e.g. stale) entry so a
+      // later reload does not keep re-evaluating it.
+      if (payload.logMtime > 0 && payload.logMtime !== disk.scalingLogMtime && !stateSaveTimer.running && !stateWriter.running) {
+        state = Model.withScalingLogMtime(disk, payload.logMtime)
+        flushState()
+      }
+      return
+    }
+    if (!stateSaveTimer.running && !stateWriter.running) state = disk
+    state = Model.withScalingLogMtime(state, payload.logMtime)
+    adoptScale(request.monitor, request.scale)
+  }
+
+  // Set the scale Omarchy's tool applied to a monitor on the current profile
+  // and regenerate the Lua. With the external unplugged the target is the
+  // profile the file was last generated for, using its remembered geometry.
+  function adoptScale(monitorName, scale) {
+    var key = externalKey || state.generatedProfile
+    if (!key || !state.profiles[key] || !internal) { flushState(); return }
+    var target = Model.profileFor(state, key)
+    var ext = external || Model.rememberedExternal(target)
+    var patch = Model.scalePatchForMonitor(target, internal, ext, monitorName, scale)
+    if (!patch) { flushState(); return }
+    state = Model.withProfile(state, key, Object.assign({}, target, patch))
+    // Without any external geometry renderLua keeps only the laptop rule; the
+    // full layout comes back on hotplug via onMonitorsRefreshed.
+    var updated = Model.profileFor(state, key)
+    if (requireInstalled && !applying) queueApply(Model.renderLua(updated, internal, ext), key, external, updated.internalScale)
+    else flushState()
   }
 
   // ---- apply -------------------------------------------------------------
@@ -137,9 +210,35 @@ Item {
   function apply() {
     if (!canApply) return
     if (applyProc.running) { autoApplyPending = true; return }
+    queueApply(renderedLua(), externalKey, external, layout.internal.scale)
+  }
+
+  // Apply in three steps: persist the laptop scale into monitors.lua, land the
+  // state on disk, then write the layout and reload. The state must be saved
+  // first because applying can change a scale, which rebuilds the bar and this
+  // Service with it before a deferred save could run.
+  function queueApply(lua, key, liveExternal, laptopScale) {
+    if (applying || syncProc.running) return
     applying = true
     lastError = ""
-    var lua = renderedLua()
+    queuedApply = { lua: lua, key: key, external: liveExternal || null }
+    syncProc.command = ["bash", pluginDir + "/bin/sync-monitors-lua.sh", Model.luaNumber(laptopScale)]
+    syncProc.running = true
+  }
+
+  function onMonitorsLuaSynced() {
+    if (stateLoaded) { flushState(); return }
+    var pending = queuedApply
+    queuedApply = null
+    if (pending) applyLua(pending.lua, pending.key, pending.external)
+  }
+
+  function applyLua(lua, key, liveExternal) {
+    if (applyProc.running) return
+    applying = true
+    lastError = ""
+    applyKey = key
+    applyExternal = liveExternal || null
     applyProc.command = ["bash", "-c", "printf '%s' " + shellQuote(lua) + " | bash " + shellQuote(pluginDir + "/bin/apply-layout.sh")]
     applyProc.running = true
   }
@@ -207,6 +306,48 @@ Item {
           || name === "monitoraddedv2" || name === "monitorremovedv2"
           || name === "configreloaded")
         monitorsRefreshTimer.restart()
+      if (name === "configreloaded") scalingCheckTimer.restart()
+    }
+  }
+
+  // omarchy-hyprland-monitor-scaling appends to its audit log, then rewrites
+  // monitors.lua, which makes Hyprland reload and undo its live change. Read
+  // the log after every append or reload and adopt the entry it recorded.
+  Timer {
+    id: scalingCheckTimer
+    interval: 300
+    repeat: false
+    onTriggered: root.checkScalingLog()
+  }
+
+  readonly property string omarchyStateDir: stateDirPath.substring(0, stateDirPath.lastIndexOf("/"))
+
+  FileView {
+    path: root.omarchyStateDir + "/monitor-scaling.log"
+    watchChanges: true
+    printErrors: false
+    onFileChanged: scalingCheckTimer.restart()
+  }
+
+  // The log is appended in place, but may not exist yet: watch its directory
+  // for it to appear (Hyprland's configreloaded covers the append itself).
+  FileView {
+    path: root.omarchyStateDir
+    watchChanges: true
+    printErrors: false
+    onFileChanged: scalingCheckTimer.restart()
+  }
+
+  Process {
+    id: scalingProc
+    command: ["bash", root.pluginDir + "/bin/read-scaling-log.sh"]
+    stdout: StdioCollector {
+      id: scalingStdout
+      waitForEnd: true
+      onStreamFinished: {
+        if (root.stdoutOverLimit(scalingStdout.text, Model.MAX_OUTPUT_CHARS)) return
+        root.onScalingLogRead(Model.parseScalingPayload(scalingStdout.text))
+      }
     }
   }
 
@@ -229,6 +370,7 @@ Item {
         root.luaExists = payload.luaExists
         root.stateLoaded = true
         root.onMonitorsRefreshed()
+        if (root.scalingCheckPending) { root.scalingCheckPending = false; root.checkScalingLog() }
       }
     }
     onExited: function(code) {
@@ -258,7 +400,15 @@ Item {
     id: stateWriter
     onExited: function(code) {
       if (code !== 0) root.lastError = "Failed to save settings"
+      var pending = root.queuedApply
+      root.queuedApply = null
+      if (pending) root.applyLua(pending.lua, pending.key, pending.external)
     }
+  }
+
+  Process {
+    id: syncProc
+    onExited: root.onMonitorsLuaSynced()
   }
 
   Process {
@@ -273,7 +423,11 @@ Item {
         root.luaExists = root.luaExists || result.ok
         if (result.ok) {
           var next = Model.parseState(JSON.stringify(root.state))
-          next.generatedProfile = root.externalKey
+          next.generatedProfile = root.applyKey
+          // Remember the external's geometry so the file can be regenerated
+          // for this profile while the monitor is unplugged.
+          if (root.applyExternal && next.profiles[root.applyKey])
+            next.profiles[root.applyKey].monitor = root.applyExternal
           root.state = next
           root.scheduleStateSave()
         } else {
@@ -310,5 +464,5 @@ Item {
     }
   }
 
-  Component.onCompleted: reload()
+  Component.onCompleted: { reload(); checkScalingLog() }
 }
