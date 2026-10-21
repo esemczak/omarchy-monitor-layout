@@ -1,1 +1,4 @@
 singleton LaptopScreensaver 1.0 LaptopScreensaver.qml
+ScreensaverOverlay 1.0 ScreensaverOverlay.qml
+BrightnessSlider 1.0 BrightnessSlider.qml
+Service 1.0 Service.qml
